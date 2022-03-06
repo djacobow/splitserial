@@ -1,0 +1,35 @@
+{
+    "common_commands": [
+        "activate",
+        "help",
+        "reboot",
+        "tlsync pu",
+        "tlsync pd",
+        "tlsync logstatus",
+        "tlsync rssi",
+        "tlsync gettime",
+        "tlsync go"
+    ],
+    "color_patterns": {
+        "error": {
+            "pattern": "\\]\\s*error\\s*:",
+            "fg": "COLOR_RED",
+            "bg": "COLOR_BLACK"
+            },
+        "fatal": {
+            "pattern": "\\]\\s*d?fatal\\s*:",
+            "fg": "COLOR_RED",
+            "bg": "COLOR_BLACK"
+        },
+        "warning": {
+            "pattern": "\\]\\s*d?warn\\s*:",
+            "fg": "COLOR_YELLOW",
+            "bg": "COLOR_BLACK"
+        },
+        "debug": {
+            "pattern": "]\\s*d?debug\\s*:",
+            "fg": "COLOR_CYAN",
+            "bg": "COLOR_BLACK"
+        }
+    }
+}
