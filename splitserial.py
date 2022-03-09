@@ -11,6 +11,7 @@ import serial
 import sys
 import threading
 import time
+import socket
 
 
 class CommandHistory(object):
@@ -206,7 +207,44 @@ class ScrollablePad(object):
         self.refresh()
 
 
-    
+class StreamyThing(object):
+    def __init__(self, **kwargs):
+        self.host = kwargs.pop('host')
+        self.port = kwargs.pop('port')
+        self.dev  = kwargs.pop('device')
+        self.baud = kwargs.pop('baud')
+        self.sk = None 
+        self.sr = None 
+        if self.host is not None and self.port is not None:
+            self.sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            hp = (self.host, self.port)
+            self.sk.connect(hp)
+            self.skf = self.sk.makefile('rb')
+        elif self.dev is not None and self.baud is not None:
+            self.sr = serial.Serial(self.dev, self.baud)
+
+        if self.sk is None and self.sr is None:
+            raise Exception('Could not create stream. Must provide host/port or dev/speed')
+
+    def paramStr(self):
+        if self.sk:
+            return f'Host: {self.host} Port: {self.port}'
+        elif self.sr:
+            return f' Port: {self.dev} Speed: {self.baud} bit/s '
+        return ''
+           
+    def readline(self):
+        if self.sr:
+            return self.sr.readline()
+        elif self.skf:
+            return self.skf.readline()
+
+    def write(self, b):
+        if self.sr:
+            self.sr.write(b)
+        elif self.sk:
+            self.sk.send(b)
+
 class SplitSerial(object):
     def __init__(self, **kwargs):
         wh = os.get_terminal_size()
@@ -250,18 +288,37 @@ Commands:
 
     def getArgs(self):
         parser = argparse.ArgumentParser(description='Yet Another Serial Console Thingy')
-        parser.add_argument(
+
+        me0 = parser.add_mutually_exclusive_group()
+
+        me0.add_argument(
+            '--host',
+            type=str,
+            default=None,
+            help='Name of remote host to open connection to'
+        )
+        me0.add_argument(
             '--device', '-d',
             type=str,
             default='/dev/ttyUSB1',
             help='Name of serial port to open'
         )
-        parser.add_argument(
+
+        me1 = parser.add_mutually_exclusive_group()
+
+        me1.add_argument(
             '--baud', '-b',
             type=int,
             default=1000000,
             help='Serial port speed'
         )
+        me1.add_argument(
+            '--port', '-p',
+            type=int,
+            default=5001,
+            help='remot port to open'
+        )
+
         parser.add_argument(
             '--input-window-height', '-iwl',
             type=int,
@@ -328,14 +385,21 @@ Commands:
             'input_window_height',
             self.args.input_window_height
         )
-        self.port   = self.configdata.get(
+        self.device = self.configdata.get(
             'device',
             self.args.device
         )
-        self.speed  = self.configdata.get(
+        self.baud = self.configdata.get(
             'baud',
             self.args.baud
         )
+
+        self.remote = self.configdata.get('remote',
+            { 'host': self.args.host,
+              'port': self.args.port 
+            }
+        )
+
         self.logfn  = self.configdata.get(
             'logfile',
             self.args.logfile
@@ -404,7 +468,7 @@ Commands:
             window=self.stdscr,
             topleft=(0,0),
             bottomright=(self.olines-1, self.width-2),
-            title=f' Port: {self.port} Speed: {self.speed} bit/s ',
+            title=' ' + self.conn.paramStr() + ' ',
             boxattr=curses.A_DIM,
             titleattr=curses.A_ITALIC
         )
@@ -447,7 +511,7 @@ Commands:
             time.sleep(0.25)
 
     def issueCommand(self, m):
-        self.serial.write((m + '\n').encode('utf-8',errors='ignore'))
+        self.conn.write((m + '\n').encode('utf-8',errors='ignore'))
         self.iwin.clear()
         self.iwin.refresh()
 
@@ -488,7 +552,7 @@ Commands:
         self.last_ts = datetime.datetime.now()
 
         while True:
-            l = bytes(filter(lambda x: x != 0,self.serial.readline())).decode('utf-8',errors='replace')
+            l = bytes(filter(lambda x: x != 0,self.conn.readline())).decode('utf-8',errors='replace')
 
             if len(l):
                 if self.ofh is not None:
@@ -526,10 +590,17 @@ Commands:
 
     def start(self):
         try:
-            self.serial = serial.Serial(self.port, self.speed)
+            self.conn = StreamyThing(
+                host=self.remote['host'],
+                port=self.remote['port'],
+                device=self.device, 
+                baud=self.baud, 
+            )
         except Exception as e:
-            print(f'Error: Could not open serial port {self.port} {self.speed} because {repr(e)}') 
+            print('Could not open connection. Exiting.')
+            print(e)
             sys.exit(-1)
+
 
         self.ofh = None
         if self.logfn is not None:
