@@ -334,7 +334,7 @@ Commands:
         parser.add_argument(
             '--logfile', '-l',
             type=str,
-            default='log_' + re.sub(r'.\d+$','',re.sub(r'[\-:]','',re.sub(r'\+[\d:]+$','',datetime.datetime.now().isoformat()))) + '.txt',
+            default=os.path.join(os.path.expanduser('~'), 'splitserial.log'),
             help='name of logfile to write'
         )
         parser.add_argument(
@@ -360,11 +360,9 @@ Commands:
  
     def loadConfig(self):
         cfile = self.args.config
-        print('cfile',cfile)
 
         if cfile is None or not os.path.exists(cfile):
             cfile = os.path.join(os.path.dirname(__file__), 'splitserial_config.json')
-            print('cfile',cfile)
             if not os.path.exists(cfile):
                 cfile = None
 
@@ -378,8 +376,6 @@ Commands:
 
     def initFromArgs(self):
         
-        print(json.dumps(self.configdata, indent=2))
-
         # load the arguments, but favor anythign that was in the config file
         self.ilines = self.configdata.get(
             'input_window_height',
@@ -425,6 +421,7 @@ Commands:
         self.debug_log = None
         if self.args.debug_log is not None:
             self.debug_log = open(self.args.debug_log, 'a')
+            self.lprint(self.makeFileHeaderString())
 
     def lprint(self, *args, **kwargs):
         if self.debug_log is not None:
@@ -552,41 +549,66 @@ Commands:
         self.last_ts = datetime.datetime.now()
 
         while True:
-            l = bytes(filter(lambda x: x != 0,self.conn.readline())).decode('utf-8',errors='replace')
+            try:
 
-            if len(l):
-                if self.ofh is not None:
-                    header = f'{datetime.datetime.now().isoformat()}: '
-                    self.ofh.write(header.encode('utf-8'))
-                    self.ofh.write(l.encode('utf-8'))
-                    self.ofh.flush()
+                l = bytes(filter(lambda x: x != 0,self.conn.readline())).decode('utf-8',errors='replace')
 
-                color = None
-                for n in self.color_pats:
-                    v = self.color_pats[n]
-                    m = re.search(v['pattern'], l, re.IGNORECASE)
-                    if m:
-                        color = v['idx']
-                        break
+                if len(l):
+                    if self.ofh is not None:
+                        header = f'{datetime.datetime.now().isoformat()}: '
+                        self.ofh.write(header.encode('utf-8'))
+                        self.ofh.write((l.strip() + '\n').encode('utf-8'))
+                        self.ofh.flush()
 
-                if self.timestamp:
-                    now = datetime.datetime.now()
-                    delta = (now - self.last_ts).total_seconds() + 0.05
-                    dstr = re.sub(r'\.\d+$','',now.isoformat())
-                    self.opad.addstr(f'{dstr}, {delta:3.1f} | ')
-                    self.last_ts = now
+                    color = None
+                    for n in self.color_pats:
+                        v = self.color_pats[n]
+                        m = re.search(v['pattern'], l, re.IGNORECASE)
+                        if m:
+                            color = v['idx']
+                            break
+
+                    if self.timestamp:
+                        now = datetime.datetime.now()
+                        delta = (now - self.last_ts).total_seconds() + 0.05
+                        dstr = re.sub(r'\.\d+$','',now.isoformat())
+                        self.opad.addstr(f'{dstr}, {delta:3.1f} | ')
+                        self.last_ts = now
                     
-                if color is not None:
-                    self.opad.addstr(l, curses.color_pair(color))
-                else:
-                    self.opad.addstr(l)
-                self.lcount += 1
-                self.opad.refresh()
+                    if color is not None:
+                        self.opad.addstr(l, curses.color_pair(color))
+                    else:
+                        self.opad.addstr(l)
+                    self.lcount += 1
+                    self.opad.refresh()
+            except Exception as e:
+                self.lprint(f'Exception in output_thread_fn: {repr(e)}')
 
     def start_output_thread(self):
         self.othread = threading.Thread(target=self._output_thread_fn)
         self.othread.daemon = True
         self.othread.start()
+
+    def makeFileHeaderString(self):
+        configstr = json.dumps(self.configdata, indent=2).splitlines()
+        headermsg = [
+            '#',
+            f'# {sys.argv[0]} log file',
+            f'# Opened at {datetime.datetime.now().isoformat()}',
+            '# Args:',
+        ]
+        headermsg += [ f'# {s}' for s in json.dumps(vars(self.args), indent=2).splitlines() ]
+        headermsg += [
+            '#',
+            '# Configdata:'
+        ]
+        headermsg += [ f'# {s}' for s in configstr ]
+        headermsg += [
+            '#',
+            '#',
+        ]
+        return '\n'.join(headermsg)
+
 
     def start(self):
         try:
@@ -597,17 +619,18 @@ Commands:
                 baud=self.baud, 
             )
         except Exception as e:
-            print('Could not open connection. Exiting.')
-            print(e)
+            self.lprint('Could not open connection. Exiting.')
+            self.lprint(e)
             sys.exit(-1)
 
 
         self.ofh = None
         if self.logfn is not None:
             try:
-                self.ofh = open(self.logfn, 'wb')
+                self.ofh = open(self.logfn, 'ab')
+                self.ofh.write(self.makeFileHeaderString().encode('utf-8'))
             except Exception as e:
-                print(f'Error: could not open log file "{self.logfn}" for writing: {repr(e)}')
+                self.lprint(f'Error: could not open log file "{self.logfn}" for writing: {repr(e)}')
 
         self.stdscr = curses.initscr()
         curses.start_color()
